@@ -391,3 +391,59 @@ class SensorDB:
             if cursor:
                 cursor.close()
             self.close()
+            
+    def get_sensors_from_area(self, min_lat, min_lon, max_lat, max_lon): 
+        """
+        Retrieves all sensors within the specified bounding box (min_lat, min_lon, max_lat, max_lon).
+
+        :param min_lat: Minimum latitude of the bounding box
+        :param min_lon: Minimum longitude of the bounding box
+        :param max_lat: Maximum latitude of the bounding box
+        :param max_lon: Maximum longitude of the bounding box
+        :return: List of Sensor objects within the area
+        """
+        try:
+            self.connect()
+            cursor = self.connection.cursor()
+
+            
+            query = sql.SQL("""
+                SELECT sensor_id, additional_information, original_id, 
+                       ST_AsText(position) AS position_wkt, 
+                       sensor_type, source
+                FROM {table}
+                WHERE ST_Within(
+                    position::geometry,
+                    ST_MakeEnvelope(%s, %s, %s, %s, 4326)
+                )
+            """).format(table=sql.Identifier(DBConfig.SENSOR_TABLE))
+
+            cursor.execute(query, (min_lon, min_lat, max_lon, max_lat))
+            results = cursor.fetchall()
+
+            sensors = []
+            for result in results:
+                position_wkt = result[3]
+                coords = position_wkt[6:-1].split()
+                longitude, latitude = map(float, coords)
+                sensor = Sensor(
+                    sensor_id=result[0],
+                    additional_information=result[1],
+                    original_id=result[2],
+                    position=Position(longitude=longitude, latitude=latitude),
+                    sensor_type=result[4],
+                    source=result[5]
+                )
+                sensors.append(sensor)
+
+            print(f"Retrieved {len(sensors)} sensors from area.")
+            return sensors
+
+        except Exception as e:
+            print(f"Error retrieving sensors from area: {e}")
+            return []
+
+        finally:
+            if cursor:
+                cursor.close()
+            self.close()
