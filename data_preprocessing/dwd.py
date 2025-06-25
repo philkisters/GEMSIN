@@ -3,7 +3,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 
-def preprocess_dwd(data):
+def preprocess_dwd(data, sliding_window_size = 150, gap_len=10, miss_rate=0.2):
+
   """
   Prepares the DWD dataset of a sensor for use with PyPots.
   This function splits the given sensor measurements (as a DataFrame) into training, validation, and test sets,
@@ -12,6 +13,12 @@ def preprocess_dwd(data):
   Args:
     data (pd.DataFrame): DataFrame containing time series measurements of a sensor. Columns represent different measurements,
               and a 'timestamp' column is excluded from normalization.
+    sliding_window_size (int, optional): Length of the sliding window to segment the time series into overlapping sequences.
+      Determines the number of time steps in each window. Default is 150.
+    gap_len (int, optional): Length of each artificially introduced missing subsequence (gap) within the data windows.
+      Controls how many consecutive values are set as missing. Default is 10.
+    miss_rate (float, optional): Proportion of values to be set as missing in each window (between 0 and 1).
+      Determines the overall missingness rate. Default is 0.2.
   Returns:
     dict: Dictionary with the following keys:
       - "n_steps": Length of the sliding windows (int)
@@ -32,7 +39,7 @@ def preprocess_dwd(data):
   train, val = train_test_split(train_val, test_size=0.25, shuffle=False)
 
   # features contain all rows but (not timestamps)
-  features = [col for col in train.columns if col != 'timestamp']
+  features = [col for col in train.columns if col not in ['timestamp', 'month', 'year']]
   
   scaler = StandardScaler()
   train_X = train.copy()
@@ -43,20 +50,18 @@ def preprocess_dwd(data):
   val_X = scaler.transform(val[features])
   test_X = scaler.transform(test[features])
 
-  n_steps = 150
-  missing_seq_len = 10
-  train_X_ori = sliding_window(train_X, n_steps)
-  val_X_ori = sliding_window(val_X, n_steps)
-  test_X_ori = sliding_window(test_X, n_steps)
+  train_X_ori = sliding_window(train_X, sliding_window_size)
+  val_X_ori = sliding_window(val_X, sliding_window_size)
+  test_X_ori = sliding_window(test_X, sliding_window_size)
 
-  train_X = create_missingness(train_X_ori, 0.2, "subseq", seq_len=missing_seq_len)
-  val_X = create_missingness(val_X_ori, 0.2, "subseq", seq_len=missing_seq_len)
-  test_X = create_missingness(test_X_ori, 0.2, "subseq", seq_len=missing_seq_len)
+  train_X = create_missingness(train_X_ori, miss_rate, "subseq", seq_len=gap_len)
+  val_X = create_missingness(val_X_ori, miss_rate, "subseq", seq_len=gap_len)
+  test_X = create_missingness(test_X_ori, miss_rate, "subseq", seq_len=gap_len)
 
 
   processed_dataset = {
       # general info
-      "n_steps": n_steps,
+      "n_steps": sliding_window_size,
       "n_features": len(features),
       "scaler": scaler,
       # train set
