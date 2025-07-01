@@ -87,6 +87,61 @@ class SensorDB:
             if cursor:
                 cursor.close()
                 self.close
+                
+    def upsert_sensor(self, sensor: Sensor) -> Sensor:
+        """
+        Inserts a new sensor or updates an existing sensor based on original_id and source.
+
+        :param sensor: Sensor object
+        :return: The inserted or updated Sensor object (with sensor_id set)
+        """
+        try:
+            self.connect()
+            cursor = self.connection.cursor()
+
+            # Check if sensor exists
+            select_query = sql.SQL("""
+                SELECT sensor_id FROM {table}
+                WHERE original_id = %s AND source = %s
+            """).format(table=sql.Identifier(DBConfig.SENSOR_TABLE))
+
+            cursor.execute(select_query, (sensor.original_id, sensor.source))
+            result = cursor.fetchone()
+
+            if result:
+                # Update existing sensor
+                sensor_id = result[0]
+                update_query = sql.SQL("""
+                    UPDATE {table}
+                    SET additional_information = %s,
+                        position = ST_SetSRID(ST_MakePoint(%s, %s), 4326),
+                        sensor_type = %s
+                    WHERE sensor_id = %s
+                """).format(table=sql.Identifier(DBConfig.SENSOR_TABLE))
+
+                cursor.execute(update_query, (
+                    sensor.additional_information,
+                    sensor.position.longitude,
+                    sensor.position.latitude,
+                    sensor.sensor_type,
+                    sensor_id
+                ))
+                self.connection.commit()
+                sensor.set_sensor_id(sensor_id)
+                print(f"Sensor {sensor_id} updated successfully.")
+            else:
+                # Insert new sensor
+                sensor = self.insert_sensor(sensor)
+            return sensor
+
+        except Exception as e:
+            print(f"Error upserting sensor: {e}")
+            return sensor
+
+        finally:
+            if cursor:
+                cursor.close()
+                self.close()
     
     def add_measurment_type_for_sensor(self, sensor: Sensor, measurement_type: MeasurementType) -> bool:
         """
