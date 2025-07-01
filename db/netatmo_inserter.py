@@ -90,20 +90,23 @@ class NetAtmoInserter():
     """
     return self.db.get_sensor_by_original_id_and_source(original_id=originial_id, source=self.IDENTIFIER)
   
-  def fetch_sensors_in_area(self, area_of_interest: Rectangle, store_sensors: bool, request_delay = 2) -> list[Sensor]:   
+  def fetch_sensors_in_area(self, area_of_interest: Rectangle, store_sensors: bool = False, square_size_m = 1000, request_delay = 2) -> list[Sensor]:   
     """
     Fetches sensors located within a specified rectangular area by subdividing the area into smaller squares
     and querying each square for sensors. Ensures that only unique sensors are collected based on their original IDs.
     Args:
       area_of_interest (Rectangle): The rectangular area to search for sensors.
-      store_sensors (bool): If True, stores the fetched sensors using the store_sensors method and returns the result.
-                  If False, returns the list of unique sensors.
+      store_sensors (bool, optional): If True, stores the fetched sensors using the store_sensors method and returns the result.
+                  If False, returns the list of unique sensors. Defaults to False
+      square_size_m (int, optional): Determines the number of squares the area is divided into. 
+                  Leads to more sensors found, but increases the amount of requests agains the NetAtmo API.
+                  Defaults to 1000
       request_delay (int, optional): Delay in seconds between requests for each square. Defaults to 2.
     Returns:
       list of sensors: If store_sensors is False, returns a list of unique sensors found in the area.
              If store_sensors is True, returns the result of the store_sensors method.
     """
-    squares = area_of_interest.subdivide()
+    squares = area_of_interest.subdivide(square_size_m)
     sensor_ids = set()
     sensors = []
     
