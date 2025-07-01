@@ -1,7 +1,11 @@
+
 class Position:
   def __init__(self, latitude, longitude):
     self.latitude = latitude
     self.longitude = longitude
+  
+  def __str__(self):
+    return f'Position(latitude={self.latitude}, longitude={self.longitude})'
   
   @staticmethod
   def from_wkt_position(position_wkt:str) -> 'Position':
