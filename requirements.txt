@@ -8,3 +8,4 @@ python-dotenv==1.1.0
 rasterio==1.4.3
 scikit-learn==1.6.1
 psycopg2==2.9.10
+geopy==2.4.1
