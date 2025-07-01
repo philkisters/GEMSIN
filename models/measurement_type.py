@@ -22,6 +22,10 @@ class MeasurementType(Enum):
     PRECIPITATION_TYPE = 16
     SUN_24H = 17
     SNOW_24H = 18
+    TEMPERATURE_24H_MIN = 19
+    TEMPERATURE_24H_MAX = 20
+    HUMIDITY_24H_MIN = 21
+    HUMIDITY_24H_MAX = 22
 
     @staticmethod
     def get_unit_for_type(measurement_type) -> str:
@@ -30,8 +34,12 @@ class MeasurementType(Enum):
             MeasurementType.PRESSURE_24H: "mBar",
             MeasurementType.TEMPERATURE: "Celsius",
             MeasurementType.TEMPERATURE_24H: "Celsius",
+            MeasurementType.TEMPERATURE_24H_MIN: "Celsius",
+            MeasurementType.TEMPERATURE_24H_MAX: "Celsius",
             MeasurementType.HUMIDITY: "percentage",
             MeasurementType.HUMIDITY_24H: "percentage",
+            MeasurementType.HUMIDITY_24H_MIN: "percentage",
+            MeasurementType.HUMIDITY_24H_MAX: "percentage",
             MeasurementType.WIND_STRENGTH: "km/h",
             MeasurementType.GUST_STRENGTH: "km/h",
             MeasurementType.WIND_STRENGTH_24H: "km/h",
