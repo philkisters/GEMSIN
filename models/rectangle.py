@@ -32,7 +32,7 @@ class Rectangle:
 
         sw = Position(lat, lon)
         ne = Position(next_lat, next_lon)
-        squares.append(Rectangle(sw, ne))
+        squares.append(Rectangle(ne, sw))
 
         lon = next_lon
       lat = next_lat
