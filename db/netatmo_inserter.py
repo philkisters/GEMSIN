@@ -1,9 +1,10 @@
 import requests
 import time
 import json
+import datetime
 
 from db import SensorDB
-from models import Sensor, Rectangle, Position
+from models import Sensor, Rectangle, Position, Measurement, MeasurementType
 
 class NetAtmoFetcher():
   def __init__(self):
@@ -36,9 +37,50 @@ class NetAtmoFetcher():
 
     if date_end is not None:
       data['date_end'] = str(date_end)
+      
+    result = []
 
-    response = requests.post(url, headers=headers, json=data)
-    return data, response
+    last_timestamp = None
+
+    while True:
+      if last_timestamp is None:
+        print("Fetching data starting from begin")
+      else:
+        print(f"Fetching data starting from {datetime.datetime.fromtimestamp(last_timestamp).isoformat()}")
+        data['date_begin'] = str(last_timestamp)
+      
+      response = requests.post(url, headers=headers, json=data)
+      
+      if response.status_code != 200:
+        print(f"Request failed -- StatusCode Expected: 200 -- Actual: {response.status_code}")
+        print(data)
+        print(response.json())
+        return result
+      
+      response = response.json()['body']
+      
+      if len(response) <= 1:
+        print("No data points found")
+        return result
+      
+      
+      timestamps = sorted(list([int(timestamp) for timestamp in response.keys()]))
+      for timestamp in timestamps:
+        values = response[str(timestamp)]
+        measurement = {
+          "timestamp": timestamp 
+        }
+        for index, type in enumerate(types):
+          measurement[type] = values[index]
+        
+        result.append(measurement)
+        
+      last_timestamp = timestamps[-1] + 1
+      
+      if len(timestamps) < 1024:
+        break
+      
+    return result
   
   def fetch_sensors_for_area(self, area: Rectangle):
     url = "https://app.netatmo.net/api/getpublicmeasures"
@@ -73,6 +115,36 @@ class NetAtmoFetcher():
 
 class NetAtmoInserter():
   IDENTIFIER = "Netatmo" 
+  NETATMO_TYPE_MAPPING = {
+    "latest": {
+      "temperature": MeasurementType.TEMPERATURE,
+      "pressure": MeasurementType.PRESSURE,
+      "humidity": MeasurementType.HUMIDITY,
+      "rain_60min": MeasurementType.RAIN_60MIN,
+      "rain_24h": MeasurementType.RAIN_24H,
+      "rain_live": MeasurementType.RAIN_LIVE,
+      "wind_strength": MeasurementType.WIND_STRENGTH,
+      "wind_angle": MeasurementType.WIND_ANGLE,
+      "gust_strength": MeasurementType.GUST_STRENGTH,
+      "gust_angle": MeasurementType.GUST_ANGLE,
+    },
+    "1day": {
+      "temperature": MeasurementType.TEMPERATURE_24H,
+      "pressure": MeasurementType.PRESSURE_24H,
+      "humidity": MeasurementType.HUMIDITY_24H,
+      "min_temp": MeasurementType.TEMPERATURE_24H_MIN,
+      "min_pressure": MeasurementType.PRESSURE_24H_MIN,
+      "min_hum": MeasurementType.HUMIDITY_24H_MIN,
+      "max_temp": MeasurementType.TEMPERATURE_24H_MAX,
+      "max_pressure": MeasurementType.PRESSURE_24H_MAX,
+      "max_hum": MeasurementType.HUMIDITY_24H_MAX,
+      "rain": MeasurementType.RAIN_24H,
+      "wind_strength": MeasurementType.WIND_STRENGTH_24H,
+      "wind_angle": MeasurementType.WIND_ANGLE_24H,
+      "gust_strength": MeasurementType.GUST_STRENGTH_24H,
+      "gust_angle": MeasurementType.GUST_ANGLE_24H,
+    }
+  }
   
   def __init__(self, db: SensorDB):
     self.db = db
@@ -145,6 +217,28 @@ class NetAtmoInserter():
       stored_sensors.append(stored_sensor)
       
     return stored_sensors
+  
+  def store_measurements(self, sensor: Sensor, received_measurements, scale):
+    assert scale in ["latest", "1day"], f"Currently we can only story daily or latest measurements in the database."
+    
+    print(f"Starting to store {len(received_measurements)} received measurements for sensor {sensor.original_id}")
+    measurements = []
+    for received_measurement in received_measurements:
+      for type in received_measurement:
+        if type == "timestamp":
+          continue
+        
+        measurement_type = self.NETATMO_TYPE_MAPPING[scale][type]
+        unit = MeasurementType.get_unit_for_type(measurement_type)
+
+        timestamp  = datetime.datetime.fromtimestamp(received_measurement['timestamp'])
+        
+        measurement = Measurement(measurement_type.value, sensor.position, timestamp, unit, received_measurement[type], sensor.sensor_id)
+        measurements.append(measurement)
+    
+    print(f"Storing {len(measurements)} for sensor {sensor.original_id}")
+    self.db.insert_batch_measurements(measurements)
+
 
   def sensor_from_response_item(self, item):
     """
@@ -182,52 +276,61 @@ class NetAtmoInserter():
     modules = json.dumps(modules)
     
     return Sensor(additional_information="", original_id=item['_id'], position=position, sensor_type=modules, source=self.IDENTIFIER)
-    
   
-  def fetch_data_from_sensor_module(self, device_id, module_id, types, scale="1day", date_begin = None, date_end = None):
-    """
-    Fetches weather data from a specific Netatmo sensor module.
-    Args:
-      device_id (str): The ID of the Netatmo device.
-      module_id (str): The ID of the sensor module within the device.
-      types (list of str): List of measurement types to fetch (e.g., ["Temperature", "Humidity"]).
-      scale (str, optional): The time scale for the data aggregation (default is "1day", other options are "latest", "30min", "1hour", "3hours", "1day", "1week", "1month").
-      date_begin (int or None, optional): The start timestamp (UNIX epoch) for the data range. If None, fetches from earliest available.
-      date_end (int or None, optional): The end timestamp (UNIX epoch) for the data range. If None, fetches up to latest available.
-    Returns:
-      list of dict: A list of measurements, each represented as a dictionary with a "timestamp" key and keys for each requested type.
-              Returns an empty list if no data is found or if the request fails.
-    """
-    req, res = self.netatmo_fetcher.fetch_weather_data(device_id=device_id, module_id=module_id, types=types, scale=scale, date_begin=date_begin, date_end=date_end)
+  def fetch_data_from_sensor(self, sensor: Sensor, types, scale="1day", date_begin = None, date_end = None):
+    assert sensor.source == self.IDENTIFIER, f"Must be a '{self.IDENTIFIER}' sensor to receive measurements, got '{sensor.source}' instead"
+    assert scale in ["latest", "30min", "1hour", "3hours", "1day", "1week", "1month"], f"Scale must be one of the following: (latest, 30min, 1hour, 3hours, 1day, 1week, 1month), got {scale} instead"
+    assert sensor.sensor_type != "", f"The sensor_type field must contain module information, but is empty for this sensor."
     
-    if res.status_code != 200:
-      print(f"Got status code != 200 {res.status_code}")
-      print(res.json())
-      return []
+    modules = json.loads(sensor.sensor_type)
+    get_all = types == 'all'
+    
+    measurements = []
+    
+    print(f"Get all: {get_all}")
+    
+    for module in modules:
+      if get_all:
+        selected_types = module['types']
+      else:
+        selected_types = self._select_types_with_subtypes(module['types'], types)
       
-    res = res.json()
+      if selected_types:
+        print(f"{module['module_id']}: Found selected types: {selected_types}")
+        
+        data = self.netatmo_fetcher.fetch_weather_data(sensor.original_id, module['module_id'], selected_types, scale, date_begin, date_end)
+        print(f"Received {len(data)} measurements for {selected_types} on sensor {sensor.original_id}")
+        measurements.append({
+          'module_id': module['module_id'],
+          'measurements': data
+        })
     
-    if len(res['body']) <= 1:
-      print("No data points found")
-      return []
+    return measurements
     
-    
-    result = []
-    timestamps = sorted(list([int(timestamp) for timestamp in res['body'].keys()]))
-    print(f"{len(timestamps)} measurements found for sensor {device_id}")
-    
-    for timestamp in timestamps:
-      values = res['body'][str(timestamp)]
-      measurement = {
-        "timestamp": timestamp 
-      }
-      for index, type in enumerate(types):
-        measurement[type] = values[index]
-      
-      result.append(measurement)
-      
-    return result
-    
-    
-    
-    
+  def _select_types_with_subtypes(self, module_types, type_filter):
+    selected_types = []
+    for type in module_types:
+      if type in type_filter:
+        selected_types.append(type)
+        # Add related subtypes if present
+        if type == "temperature":
+          for sub in ["min_temp", "max_temp"]:
+            if sub in type_filter:
+              selected_types.append(sub)
+        elif type == "humidity":
+          for sub in ["min_hum", "max_hum"]:
+            if sub in type_filter:
+              selected_types.append(sub)
+        elif type == "pressure":
+          for sub in ["min_pressure", "max_pressure"]:
+            if sub in type_filter:
+              selected_types.append(sub)
+        elif type == "co2":
+          for sub in ["min_co2", "max_co2"]:
+            if sub in type_filter:
+              selected_types.append(sub)
+        elif type == "noise":
+          for sub in ["min_noise", "max_noise"]:
+            if sub in type_filter:
+              selected_types.append(sub)
+    return selected_types  

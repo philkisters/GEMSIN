@@ -26,12 +26,19 @@ class MeasurementType(Enum):
     TEMPERATURE_24H_MAX = 20
     HUMIDITY_24H_MIN = 21
     HUMIDITY_24H_MAX = 22
+    PRESSURE_24H_MIN = 23
+    PRESSURE_24H_MAX = 24
+    WIND_ANGLE_24H = 25
+    GUST_STRENGTH_24H =26
+    GUST_ANGLE_24H = 27
 
     @staticmethod
     def get_unit_for_type(measurement_type) -> str:
         units = {
             MeasurementType.PRESSURE: "mBar",
             MeasurementType.PRESSURE_24H: "mBar",
+            MeasurementType.PRESSURE_24H_MIN: "mBar",
+            MeasurementType.PRESSURE_24H_MAX: "mBar",
             MeasurementType.TEMPERATURE: "Celsius",
             MeasurementType.TEMPERATURE_24H: "Celsius",
             MeasurementType.TEMPERATURE_24H_MIN: "Celsius",
@@ -43,9 +50,12 @@ class MeasurementType(Enum):
             MeasurementType.WIND_STRENGTH: "km/h",
             MeasurementType.GUST_STRENGTH: "km/h",
             MeasurementType.WIND_STRENGTH_24H: "km/h",
+            MeasurementType.GUST_STRENGTH_24H: "km/h",
             MeasurementType.GUST_STRENGTH_24H_MAX: "km/h",
             MeasurementType.WIND_ANGLE: "degrees",
             MeasurementType.GUST_ANGLE: "degrees",
+            MeasurementType.WIND_ANGLE_24H: "degrees",
+            MeasurementType.GUST_ANGLE_24H: "degrees",
             MeasurementType.RAIN_60MIN: "mm",
             MeasurementType.RAIN_24H: "mm",
             MeasurementType.RAIN_LIVE: "mm",
