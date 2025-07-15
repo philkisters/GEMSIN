@@ -2,25 +2,34 @@ import os
 import pandas as pd
 
 from db import SensorDB
-from models.sensor import Sensor
-from models.measurement import Measurement
-from models.measurement_type import MeasurementType
-from models.position import Position
+from models import Position, MeasurementType, AggregatedMeasurement, Sensor
 from typing import List
 
 class DWDInserter:
   IDENTIFIER = "DWD"
   TIME_COLUMN = "MESS_DATUM"
+  AGGREGATION_INTERVAL = 60*60*24 # 1 day in seconds
   DWD_TYPE_MAPPING = {
-    "TMK": MeasurementType.TEMPERATURE_24H,
-    "FM": MeasurementType.WIND_STRENGTH_24H,
-    "FX": MeasurementType.GUST_STRENGTH_24H_MAX,
-    "NM": MeasurementType.CLOUD_COVERAGE_24H,
-    "PM": MeasurementType.PRESSURE_24H,
-    "RSK": MeasurementType.RAIN_24H,
-    "SDK": MeasurementType.SUN_24H,
-    "UPM": MeasurementType.HUMIDITY_24H,
+    "TMK": MeasurementType.TEMPERATURE,
+    "FM": MeasurementType.WIND_STRENGTH,
+    "FX": MeasurementType.GUST_STRENGTH,
+    "NM": MeasurementType.CLOUD_COVERAGE,
+    "PM": MeasurementType.PRESSURE,
+    "RSK": MeasurementType.RAIN,
+    "SDK": MeasurementType.SUN,
+    "UPM": MeasurementType.HUMIDITY
   }
+  AGR_METHOD_MAPPING = {
+      MeasurementType.TEMPERATURE: "AVERAGE",
+      MeasurementType.WIND_STRENGTH: "AVERAGE",
+      MeasurementType.GUST_STRENGTH: "MAX",
+      MeasurementType.CLOUD_COVERAGE: "AVERAGE",
+      MeasurementType.PRESSURE: "AVERAGE",
+      MeasurementType.RAIN: "AVERAGE",
+      MeasurementType.SUN: "AVERAGE",
+      MeasurementType.HUMIDITY: "AVERAGE"
+  }
+  
   def __init__(self, db: SensorDB):
     self.db = db
     
@@ -40,7 +49,7 @@ class DWDInserter:
   
       self.db.add_measurment_type_for_sensor(sensor, measurement_type)
   
-  def store_measurement(self, sensor: Sensor, column, timestamp, value) -> Measurement:
+  def store_measurement(self, sensor: Sensor, column, timestamp, value) -> AggregatedMeasurement:
     measurement_type = self.get_measurement_type(column)
     if measurement_type == MeasurementType.UNKNOWN: 
       raise Exception(f"Invalid column to store: {column}")
@@ -48,14 +57,16 @@ class DWDInserter:
       print(f"Ignoring row with timestampt {timestamp} since value is -999")
       return None
     
-    measurement = Measurement(measurement_type=measurement_type.value, 
+    measurement = AggregatedMeasurement(measurement_type=measurement_type.value, 
                               position=sensor.position, 
                               timestamp=timestamp, 
                               unit=MeasurementType.get_unit_for_type(measurement_type), 
                               value=value, 
-                              sensor_id=sensor.sensor_id)
+                              sensor_id=sensor.sensor_id,
+                              interval_in_seconds=self.AGGREGATION_INTERVAL,
+                              aggregation_method=self.AGR_METHOD_MAPPING[measurement_type])
     
-    measurement_id = self.db.insert_measurement(measurement)
+    measurement_id = self.db.insert_agr_measurement(measurement)
     if measurement_id != -1:
       measurement.set_measurement_id(measurement_id)
       return measurement
@@ -137,14 +148,16 @@ class DWDInserter:
           continue
         if last_measurement is not None and row[self.TIME_COLUMN] <= last_measurement:
           continue
-        measurement = Measurement(measurement_type=measurement_type.value, 
+        measurement = AggregatedMeasurement(measurement_type=measurement_type.value, 
                               position=sensor.position, 
                               timestamp=row[self.TIME_COLUMN], 
                               unit=MeasurementType.get_unit_for_type(measurement_type), 
                               value=row[column], 
-                              sensor_id=sensor.sensor_id)
+                              sensor_id=sensor.sensor_id,
+                              interval_in_seconds=86400,
+                              aggregation_method=self.AGR_METHOD_MAPPING[measurement_type])
         measurements.append(measurement)
       
-      self.db.insert_batch_measurements(measurements)
+      self.db.insert_batch_aggregated_measurements(measurements)
     
     

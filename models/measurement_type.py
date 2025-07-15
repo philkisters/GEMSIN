@@ -31,6 +31,12 @@ class MeasurementType(Enum):
     WIND_ANGLE_24H = 25
     GUST_STRENGTH_24H =26
     GUST_ANGLE_24H = 27
+    CLOUD_COVERAGE = 28
+    CO2 = 29
+    SUN = 30
+    SNOW = 31
+    RAIN = 32
+    
 
     @staticmethod
     def get_unit_for_type(measurement_type) -> str:

@@ -4,7 +4,7 @@ import json
 import datetime
 
 from db import SensorDB
-from models import Sensor, Rectangle, Position, Measurement, MeasurementType
+from models import Sensor, Rectangle, Position, Measurement, MeasurementType, AggregatedMeasurement
 
 class NetAtmoFetcher():
   def __init__(self):
@@ -111,56 +111,85 @@ class NetAtmoFetcher():
       return []
     
     return params, response.json()
+
+  def fetch_sensor_data(self, device_id):
+    url = "https://app.netatmo.net/api/getpublicmeasure"
+
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "en-US,en;q=0.9,de;q=0.8,de-DE;q=0.7,zh-TW;q=0.6,zh-CN;q=0.5,zh;q=0.4,sv;q=0.3",
+        "authorization": "Bearer " + self.token,
+        "content-type": "application/json"
+    }
+
+    data = {
+        "device_id": device_id,
+        "get_favorites": False
+    }
+    
+    response = requests.post(url, headers=headers, json=data)
+    
+    if response.status_code != 200:
+      print(f"Request failed -- StatusCode Expected: 200 -- Actual: {response.status_code}")
+      print(data)
+      print(response.json())
+      return None
+    
+    return data, response.json()
     
 
 class NetAtmoInserter():
   IDENTIFIER = "Netatmo" 
   NETATMO_TYPE_MAPPING = {
-    "latest": {
-      "temperature": MeasurementType.TEMPERATURE,
-      "pressure": MeasurementType.PRESSURE,
-      "humidity": MeasurementType.HUMIDITY,
-      "rain_60min": MeasurementType.RAIN_60MIN,
-      "rain_24h": MeasurementType.RAIN_24H,
-      "rain_live": MeasurementType.RAIN_LIVE,
-      "wind_strength": MeasurementType.WIND_STRENGTH,
-      "wind_angle": MeasurementType.WIND_ANGLE,
-      "gust_strength": MeasurementType.GUST_STRENGTH,
-      "gust_angle": MeasurementType.GUST_ANGLE,
-    },
-    "1day": {
-      "temperature": MeasurementType.TEMPERATURE_24H,
-      "pressure": MeasurementType.PRESSURE_24H,
-      "humidity": MeasurementType.HUMIDITY_24H,
-      "min_temp": MeasurementType.TEMPERATURE_24H_MIN,
-      "min_pressure": MeasurementType.PRESSURE_24H_MIN,
-      "min_hum": MeasurementType.HUMIDITY_24H_MIN,
-      "max_temp": MeasurementType.TEMPERATURE_24H_MAX,
-      "max_pressure": MeasurementType.PRESSURE_24H_MAX,
-      "max_hum": MeasurementType.HUMIDITY_24H_MAX,
-      "rain": MeasurementType.RAIN_24H,
-      "wind_strength": MeasurementType.WIND_STRENGTH_24H,
-      "wind_angle": MeasurementType.WIND_ANGLE_24H,
-      "gust_strength": MeasurementType.GUST_STRENGTH_24H,
-      "gust_angle": MeasurementType.GUST_ANGLE_24H,
-    }
+    "temperature": MeasurementType.TEMPERATURE,
+    "pressure": MeasurementType.PRESSURE,
+    "humidity": MeasurementType.HUMIDITY,
+    "rain_60min": MeasurementType.RAIN_60MIN,
+    "rain_24h": MeasurementType.RAIN_24H,
+    "rain_live": MeasurementType.RAIN_LIVE,
+    "wind_strength": MeasurementType.WIND_STRENGTH,
+    "wind_angle": MeasurementType.WIND_ANGLE,
+    "gust_strength": MeasurementType.GUST_STRENGTH,
+    "gust_angle": MeasurementType.GUST_ANGLE,
+    "min_temp": MeasurementType.TEMPERATURE,
+    "min_pressure": MeasurementType.PRESSURE,
+    "min_hum": MeasurementType.HUMIDITY,
+    "max_temp": MeasurementType.TEMPERATURE,
+    "max_pressure": MeasurementType.PRESSURE,
+    "max_hum": MeasurementType.HUMIDITY,
+    "rain": MeasurementType.RAIN,
+  }
+
+  NETATMO_INTERVAL_MAPPING = {
+    "1day": 60*60*24,
   }
   
   def __init__(self, db: SensorDB):
     self.db = db
     self.netatmo_fetcher = NetAtmoFetcher()
     
-  def get_sensor_by_id(self, originial_id) -> Sensor:
+  def get_sensor_by_id(self, original_id) -> Sensor:
     """
     Retrieves a Sensor object from the database using the provided original sensor ID and the current source identifier.
 
     Args:
-      originial_id (str): The original identifier of the sensor.
+      original_id (str): The original identifier of the sensor.
 
     Returns:
       Sensor: The Sensor object corresponding to the given original ID and source, or None if not found.
     """
-    return self.db.get_sensor_by_original_id_and_source(original_id=originial_id, source=self.IDENTIFIER)
+    return self.db.get_sensor_by_original_id_and_source(original_id=original_id, source=self.IDENTIFIER)
+  
+  
+  def fetch_sensor_by_id(self, device_id: str) -> Sensor:
+    _, res = self.netatmo_fetcher.fetch_sensor_data(device_id=device_id)
+    
+    if res == None or len(res['body']) == 0:
+      print(f"No sensor found with device_id {device_id}")
+      return None
+
+
+    return self.sensor_from_response_item(res['body'][0])
   
   def fetch_sensors_in_area(self, area_of_interest: Rectangle, store_sensors: bool = False, square_size_m = 1000, request_delay = 2) -> list[Sensor]:   
     """
@@ -183,7 +212,7 @@ class NetAtmoInserter():
     sensors = []
     
     for index, square in enumerate(squares):
-      req, res = self.netatmo_fetcher.fetch_sensors_for_area(square)
+      _, res = self.netatmo_fetcher.fetch_sensors_for_area(square)
       
       for item in res['body']:
         sensor = self.sensor_from_response_item(item)
@@ -194,7 +223,7 @@ class NetAtmoInserter():
       print(f"Square {index}/{len(squares)}: Found {len(res['body'])} sensors. Unique sensors: {len(sensors)}")
       time.sleep(request_delay)
     
-    if (store_sensors):
+    if store_sensors:
       return self.store_sensors(sensors)
     
     return sensors
@@ -219,26 +248,57 @@ class NetAtmoInserter():
     return stored_sensors
   
   def store_measurements(self, sensor: Sensor, received_measurements, scale):
-    assert scale in ["latest", "1day"], f"Currently we can only story daily or latest measurements in the database."
-    
+    assert scale in ["latest", "1day"], "Currently we can only story daily or latest measurements in the database."
+
+    if scale == "latest":
+      self._store_live_measurements(sensor, received_measurements)
+    else:
+      self._store_agr_measurements(sensor, received_measurements, scale)
+
+
+  def _store_live_measurements(self, sensor, received_measurements):
     print(f"Starting to store {len(received_measurements)} received measurements for sensor {sensor.original_id}")
     measurements = []
     for received_measurement in received_measurements:
-      for type in received_measurement:
-        if type == "timestamp":
+      for m_type in received_measurement:
+        if m_type == "timestamp":
           continue
-        
-        measurement_type = self.NETATMO_TYPE_MAPPING[scale][type]
+
+        measurement_type = self.NETATMO_TYPE_MAPPING[m_type]
         unit = MeasurementType.get_unit_for_type(measurement_type)
 
-        timestamp  = datetime.datetime.fromtimestamp(received_measurement['timestamp'])
-        
-        measurement = Measurement(measurement_type.value, sensor.position, timestamp, unit, received_measurement[type], sensor.sensor_id)
+        timestamp = datetime.datetime.fromtimestamp(received_measurement['timestamp'])
+
+        measurement = Measurement(measurement_type.value, sensor.position, timestamp, unit,
+                                  received_measurement[m_type], sensor.sensor_id)
         measurements.append(measurement)
-    
+
     print(f"Storing {len(measurements)} for sensor {sensor.original_id}")
     self.db.insert_batch_measurements(measurements)
 
+  def _store_agr_measurements(self, sensor, received_measurements, scale):
+    print(f"Starting to store {len(received_measurements)} received measurements for sensor {sensor.original_id} aggregated with a scale of {scale}")
+
+    measurements = []
+    for received_measurement in received_measurements:
+      for module_measurement in received_measurement["measurements"]:
+        for m_type in module_measurement:
+          if m_type == "timestamp":
+            continue
+
+          measurement_type = self.NETATMO_TYPE_MAPPING[m_type]
+          unit = MeasurementType.get_unit_for_type(measurement_type)
+
+          timestamp = datetime.datetime.fromtimestamp(module_measurement['timestamp'])
+
+          aggregation_method = self._get_aggregation_method_for_type(m_type)
+
+          measurement = AggregatedMeasurement(measurement_type.value, sensor.position, timestamp, unit,
+                                    module_measurement[m_type], sensor.sensor_id, self.NETATMO_INTERVAL_MAPPING[scale], aggregation_method)
+          measurements.append(measurement)
+
+    print(f"Storing {len(measurements)} aggregated measurements for sensor {sensor.original_id}")
+    self.db.insert_batch_aggregated_measurements(measurements)
 
   def sensor_from_response_item(self, item):
     """
@@ -252,6 +312,7 @@ class NetAtmoInserter():
       Sensor: An instance of the Sensor class populated with information extracted from the response item.
           If extraction fails due to missing keys, returns a Sensor object with default/empty values.
     """
+    print(item)
     position = Position(item['place']['location'][1], item['place']['location'][0])
     try:
       modules = []
@@ -280,7 +341,7 @@ class NetAtmoInserter():
   def fetch_data_from_sensor(self, sensor: Sensor, types, scale="1day", date_begin = None, date_end = None):
     assert sensor.source == self.IDENTIFIER, f"Must be a '{self.IDENTIFIER}' sensor to receive measurements, got '{sensor.source}' instead"
     assert scale in ["latest", "30min", "1hour", "3hours", "1day", "1week", "1month"], f"Scale must be one of the following: (latest, 30min, 1hour, 3hours, 1day, 1week, 1month), got {scale} instead"
-    assert sensor.sensor_type != "", f"The sensor_type field must contain module information, but is empty for this sensor."
+    assert sensor.sensor_type != "", "The sensor_type field must contain module information, but is empty for this sensor."
     
     modules = json.loads(sensor.sensor_type)
     get_all = types == 'all'
@@ -309,28 +370,39 @@ class NetAtmoInserter():
     
   def _select_types_with_subtypes(self, module_types, type_filter):
     selected_types = []
-    for type in module_types:
-      if type in type_filter:
-        selected_types.append(type)
+    for mtype in module_types:
+      if mtype in type_filter:
+        selected_types.append(mtype)
         # Add related subtypes if present
-        if type == "temperature":
+        if mtype == "temperature":
           for sub in ["min_temp", "max_temp"]:
             if sub in type_filter:
               selected_types.append(sub)
-        elif type == "humidity":
+        elif mtype == "humidity":
           for sub in ["min_hum", "max_hum"]:
             if sub in type_filter:
               selected_types.append(sub)
-        elif type == "pressure":
+        elif mtype == "pressure":
           for sub in ["min_pressure", "max_pressure"]:
             if sub in type_filter:
               selected_types.append(sub)
-        elif type == "co2":
+        elif mtype == "co2":
           for sub in ["min_co2", "max_co2"]:
             if sub in type_filter:
               selected_types.append(sub)
-        elif type == "noise":
+        elif mtype == "noise":
           for sub in ["min_noise", "max_noise"]:
             if sub in type_filter:
               selected_types.append(sub)
-    return selected_types  
+      if "_" in mtype and "rain" in type_filter and "rain" not in selected_types:
+        # Edgecase for all the rain_X types, which for aggregated collection uses just "rain"
+        selected_types.append("rain")
+    return selected_types
+
+  def _get_aggregation_method_for_type(self, m_type):
+    if m_type.startswith("min_"):
+      return "MIN"
+    if m_type.startswith("max_"):
+      return "MAX"
+
+    return "AVERAGE"

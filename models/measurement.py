@@ -18,6 +18,17 @@ class Measurement:
   
   def __repr__(self):
     return (f"Measurement(measurement_id={self.measurement_id}, "
-        f"measurement_type={self.measurement_type}, position={self.position}, "
-        f"timestamp={self.timestamp}, unit='{self.unit}', value={self.value}, "
-        f"sensor_id={self.sensor_id})")
+      f"measurement_type={self.measurement_type}, position={self.position}, "
+      f"timestamp={self.timestamp}, unit='{self.unit}', value={self.value}, "
+      f"sensor_id={self.sensor_id})")
+    
+
+class AggregatedMeasurement(Measurement):
+  def __init__(self, measurement_type, position: Position, timestamp, unit, value, sensor_id, interval_in_seconds, aggregation_method, measurement_id=-1):
+    super().__init__(measurement_type, position, timestamp, unit, value, sensor_id, measurement_id)
+    self.interval_in_seconds = interval_in_seconds
+    self.aggregation_method = aggregation_method
+
+  def __repr__(self):
+    base_repr = super().__repr__()[:-1]  # remove closing parenthesis
+    return f"{base_repr}, interval_in_seconds={self.interval_in_seconds}, aggregation_method={self.aggregation_method})"

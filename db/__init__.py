@@ -1,16 +1,14 @@
 import psycopg2
 from psycopg2 import sql
 from typing import List
-from models.sensor import Sensor
-from models.position import Position
-from models.measurement_type import MeasurementType
-from models.measurement import Measurement
+from models import Measurement, AggregatedMeasurement, MeasurementType, Position, Sensor, Rectangle
 
 
 class DBConfig:
     SENSOR_TABLE = "sensor"
     SENSOR_MEASUREMENT_TYPE_TABLE = "sensor_measurement_types"
     MEASUREMENT_TABLE = "measurement" 
+    AGGREGATED_MEASUREMENT_TABLE ="agr_measurements"
     
     def __init__(self, dbname, user, password, host, port):
         self.dbname = dbname
@@ -274,6 +272,48 @@ class SensorDB:
             if cursor:
                 cursor.close()
                 self.close()
+                
+    def insert_agr_measurement(self, measurement: AggregatedMeasurement) -> int:
+        """
+        Adds a new aggregated measurement to the database.
+
+        :param measurement: Measurement object
+        :return: The measurement_id if the measurement was successfully added, -1 otherwise
+        """
+        try:
+            self.connect()
+            cursor = self.connection.cursor()
+
+            insert_query = sql.SQL("""
+                INSERT INTO {table} (measurement_type, position, timestamp, unit, value, sensor_id, agr_interval_sec, agr_method)
+                VALUES (%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s, %s, %s, %s, %s)
+                RETURNING measurement_id
+            """).format(table=sql.Identifier(DBConfig.AGGREGATED_MEASUREMENT_TABLE))
+
+            cursor.execute(insert_query, (
+                measurement.measurement_type,
+                measurement.position.longitude,
+                measurement.position.latitude,
+                measurement.timestamp,
+                measurement.unit,
+                measurement.value,
+                measurement.sensor_id,
+                measurement.interval_in_seconds,
+                measurement.aggregation_method
+            ))
+            measurement_id = cursor.fetchone()[0]
+            self.connection.commit()
+            print(f"Aggregated Measurement {measurement_id} added successfully.")
+            return measurement_id
+
+        except Exception as e:
+            print(f"Error adding measurement: {e}")
+            return -1
+
+        finally:
+            if cursor:
+                cursor.close()
+                self.close()
     
     def insert_batch_measurements(self, measurements: List[Measurement]) -> int:
         """
@@ -318,7 +358,52 @@ class SensorDB:
                 cursor.close()
                 self.close()
     
-    def clear_measurements_for_sensor(self, sensor_id: int) -> int:
+    def insert_batch_aggregated_measurements(self, measurements: List[AggregatedMeasurement]) -> int:
+        """
+        Adds a batch of aggregated measurements to the database.
+
+        :param measurements: List of Measurement objects
+        :return: The number of successfully added aggregated measurements
+        """
+        try:
+            self.connect()
+            cursor = self.connection.cursor()
+
+            insert_query = sql.SQL("""
+                INSERT INTO {table} (measurement_type, position, timestamp, unit, value, sensor_id, agr_interval_sec, agr_method)
+                VALUES (%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s, %s, %s, %s, %s)
+            """).format(table=sql.Identifier(DBConfig.AGGREGATED_MEASUREMENT_TABLE))
+
+            batch_data = [
+                (
+                    measurement.measurement_type,
+                    measurement.position.longitude,
+                    measurement.position.latitude,
+                    measurement.timestamp,
+                    measurement.unit,
+                    measurement.value,
+                    measurement.sensor_id,
+                    measurement.interval_in_seconds,
+                    measurement.aggregation_method
+                )
+                for measurement in measurements
+            ]
+
+            cursor.executemany(insert_query, batch_data)
+            self.connection.commit()
+            print(f"{cursor.rowcount} aggregated measurements added successfully.")
+            return cursor.rowcount
+
+        except Exception as e:
+            print(f"Error adding batch aggregated measurements: {e}")
+            return 0
+
+        finally:
+            if cursor:
+                cursor.close()
+                self.close()
+    
+    def clear_measurements_for_sensor(self, sensor_id: int, aggregated = False) -> int:
         """
         Deletes all measurements for a given sensor from the database.
 
@@ -328,12 +413,14 @@ class SensorDB:
         try:
             self.connect()
             cursor = self.connection.cursor()
+            
+            table = DBConfig.AGGREGATED_MEASUREMENT_TABLE if aggregated else DBConfig.MEASUREMENT_TABLE
 
             delete_query = sql.SQL("""
                 DELETE FROM {table}
                 WHERE sensor_id = %s
                 RETURNING *
-            """).format(table=sql.Identifier(DBConfig.MEASUREMENT_TABLE))
+            """).format(table=sql.Identifier(table))
 
             cursor.execute(delete_query, (sensor_id,))
             deleted_rows = cursor.rowcount
@@ -413,7 +500,113 @@ class SensorDB:
             if cursor:
                 cursor.close()
                 self.close()
+    
+    def get_aggregated_measurements_for_sensor(self, sensor_id: int, measurement_type: int = None, aggregation_interval = None, aggregation_method = None, from_timestamp: str = None, to_timestamp: str = None) -> List[AggregatedMeasurement]:
+        """
+        Retrieves all aggregated measurements for a given sensor, optionally filtered by measurement type and/or from a specific timestamp range.
+
+        :param sensor_id: The ID of the sensor
+        :param measurement_type: Optional measurement type to filter by
+        :param from_timestamp: Optional timestamp to filter measurements from (inclusive). The timestamp should be in the ISO 8601 format (YYYY-MM-DD HH:MI:SS)
+        :param to_timestamp: Optional timestamp to filter measurements up to (inclusive). The timestamp should be in the ISO 8601 format (YYYY-MM-DD HH:MI:SS)
+        :return: A list of AggregatedMeasurement objects
+        """
+        try:
+            self.connect()
+            cursor = self.connection.cursor()
+
+            query = sql.SQL("""
+                SELECT measurement_id, measurement_type, ST_AsText(position) AS position_wkt, 
+                       timestamp, unit, value, sensor_id, agr_interval_sec, agr_method
+                FROM {table}
+                WHERE sensor_id = %s
+            """).format(table=sql.Identifier(DBConfig.AGGREGATED_MEASUREMENT_TABLE))
+
+            params = [sensor_id]
+            
+            if aggregation_interval is not None:
+                query += sql.SQL(" AND agr_interval_sec = %s")
+                params.append(aggregation_interval)
+
+            if aggregation_method is not None:
+                query += sql.SQL(" AND agr_method = %s")
+                params.append(aggregation_method)
+
+            if measurement_type is not None:
+                query += sql.SQL(" AND measurement_type = %s")
+                params.append(measurement_type)
+
+            if from_timestamp is not None:
+                query += sql.SQL(" AND timestamp >= %s")
+                params.append(from_timestamp)
+
+            if to_timestamp is not None:
+                query += sql.SQL(" AND timestamp <= %s")
+                params.append(to_timestamp)
+
+            cursor.execute(query, tuple(params))
+            results = cursor.fetchall()
+
+            measurements = []
+            for result in results:
+                measurement = AggregatedMeasurement(
+                    measurement_id=result[0],
+                    measurement_type=result[1],
+                    position=Position.from_wkt_position(result[2]),
+                    timestamp=result[3],
+                    unit=result[4],
+                    value=result[5],
+                    sensor_id=result[6],
+                    interval_in_seconds=result[7],
+                    aggregation_method=result[8]
+                )
+                measurements.append(measurement)
+
+            print(f"Retrieved {len(measurements)} aggregated measurements for sensor {sensor_id}.")
+            return measurements
+
+        except Exception as e:
+            print(f"Error retrieving aggregated measurements for sensor {sensor_id}: {e}")
+            return []
+
+        finally:
+            if cursor:
+                cursor.close()
+                self.close()
                 
+    
+    def has_aggregated_measurements_for_interval(self, sensor_id: int, aggregation_interval: int) -> bool:
+        """
+        Checks if there are aggregated measurements for a sensor with a specific aggregation interval.
+
+        :param sensor_id: The ID of the sensor
+        :param aggregation_interval: The aggregation interval in seconds
+        :return: True if such measurements exist, False otherwise
+        """
+        try:
+            self.connect()
+            cursor = self.connection.cursor()
+
+            query = sql.SQL("""
+                SELECT EXISTS (
+                    SELECT 1 FROM {table}
+                    WHERE sensor_id = %s AND agr_interval_sec = %s
+                )
+            """).format(table=sql.Identifier(DBConfig.AGGREGATED_MEASUREMENT_TABLE))
+
+            cursor.execute(query, (sensor_id, aggregation_interval))
+            exists = cursor.fetchone()[0]
+            return bool(exists)
+
+        except Exception as e:
+            print(f"Error checking aggregated measurements for sensor {sensor_id} and interval {aggregation_interval}: {e}")
+            return False
+
+        finally:
+            if cursor:
+                cursor.close()
+                self.close()
+    
     def get_latest_measurement_timestamp(self, sensor_id: int, measurement_type: int) -> str:
         """
         Retrieves the latest timestamp for a given sensor and measurement type.
